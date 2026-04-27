@@ -1,0 +1,106 @@
+version: "3.9"
+
+# ════════════════════════════════════════════════════════════════════════════
+#  Grupo 5 - Sistema de Reserva de Lugares (Cinema/Voo)
+#  
+#  Arquitetura:
+#    servidor1  ──RMI──▶  servidor2   (replicação bidirecional de estado)
+#    servidor2  ──RMI──▶  servidor1
+#    cliente    ──TCP──▶  servidor1   (interface do utilizador)
+#    teste      ──TCP──▶  servidor1   (simulação de condição de corrida)
+# ════════════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── Servidor Primário ───────────────────────────────────────────────────
+  servidor1:
+    build:
+      context: ./servidor
+      dockerfile: Dockerfile
+    container_name: reservas_servidor1
+    hostname: servidor1
+    environment:
+      SERVER_NAME: "Servidor_Primario"
+      RMI_HOST: "servidor1"
+      RMI_PORT: "1099"
+      SOCKET_PORT: "5000"
+      RMI_URL: "//servidor1:1099/ReservaService"
+      SECONDARY_RMI_URL: "//servidor2:1099/ReservaService"
+    ports:
+      - "5000:5000"   # Socket TCP acessível no host
+      - "1099:1099"   # RMI acessível no host
+    networks:
+      - rede_reservas
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 5000 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Servidor Secundário (Réplica) ────────────────────────────────────────
+  servidor2:
+    build:
+      context: ./servidor
+      dockerfile: Dockerfile
+    container_name: reservas_servidor2
+    hostname: servidor2
+    environment:
+      SERVER_NAME: "Servidor_Secundario"
+      RMI_HOST: "servidor2"
+      RMI_PORT: "1099"
+      SOCKET_PORT: "5000"
+      RMI_URL: "//servidor2:1099/ReservaService"
+      SECONDARY_RMI_URL: "//servidor1:1099/ReservaService"
+    ports:
+      - "5001:5000"   # Socket TCP na porta 5001 do host
+      - "1100:1099"   # RMI na porta 1100 do host
+    networks:
+      - rede_reservas
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 5000 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Teste de Condição de Corrida ─────────────────────────────────────────
+  teste_corrida:
+    build:
+      context: ./cliente
+      dockerfile: Dockerfile
+    container_name: reservas_teste
+    environment:
+      SERVER_HOST: "servidor1"
+      SOCKET_PORT: "5000"
+      NUM_CLIENTES: "15"
+    networks:
+      - rede_reservas
+    depends_on:
+      servidor1:
+        condition: service_healthy
+    # Executa o teste e termina
+    command: ["java", "TesteCondicaoCorrida"]
+
+  # ── Cliente Interativo (opcional, executa com: docker-compose run cliente) ─
+  cliente:
+    build:
+      context: ./cliente
+      dockerfile: Dockerfile
+    container_name: reservas_cliente
+    environment:
+      SERVER_HOST: "servidor1"
+      SOCKET_PORT: "5000"
+    networks:
+      - rede_reservas
+    depends_on:
+      servidor1:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+    command: ["java", "ClienteReservas"]
+    profiles:
+      - interativo  # Só inicia com: docker-compose --profile interativo up cliente
+
+networks:
+  rede_reservas:
+    driver: bridge
+    name: rede_reservas
